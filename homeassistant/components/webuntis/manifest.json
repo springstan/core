@@ -1,0 +1,8 @@
+{
+  "domain": "webuntis",
+  "name": "Webuntis Calendar",
+  "documentation": "https://www.home-assistant.io/integrations/webuntis",
+  "dependencies": ["calendar"],
+  "codeowners": ["@springstan"],
+  "requirements": ["webuntis==0.1.11"]
+}
