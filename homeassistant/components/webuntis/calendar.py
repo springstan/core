@@ -8,12 +8,10 @@ from webuntis import Session as webuntis_session
 from webuntis.errors import AuthError, BadCredentialsError
 
 from homeassistant.components.calendar import (
+    ENTITY_ID_FORMAT,
+    PLATFORM_SCHEMA,
     CalendarEventDevice,
-    calculate_offset,
-    get_date,
-    is_offset_reached,
 )
-from homeassistant.components.sensor import ENTITY_ID_FORMAT, PLATFORM_SCHEMA
 from homeassistant.const import CONF_HOST, CONF_NAME, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.helpers.aiohttp_client import SERVER_SOFTWARE as HA_USER_AGENT
 import homeassistant.helpers.config_validation as cv
@@ -22,7 +20,7 @@ from homeassistant.util import Throttle, dt
 
 _LOGGER = logging.getLogger(__name__)
 
-MIN_TIME_BETWEEN_UPDATES = timedelta(minutes=15)
+MIN_TIME_BETWEEN_UPDATES = timedelta(minutes=3)
 LOGIN_ATTEMPTS = 3
 
 DOMAIN = "webuntis"
@@ -31,7 +29,6 @@ CONF_SCHOOL = "school"
 CONF_KLASSE = "klasse"
 
 DEFAULT_NAME = "Webuntis"
-OFFSET = "!!"
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
@@ -70,11 +67,13 @@ def setup_platform(hass, config, add_entities, disc_info=None):
             "Incorrect credentials, please check your username and password: %s",
             credentials_error,
         )
+        return
     except AuthError as auth_error:
         _LOGGER.error(
             "Did not receive a valid session ID from the webuntis host, reason is unknown: %s",
             auth_error,
         )
+        return
     _LOGGER.warning("login successfull")
     filtered_klasse = session.klassen().filter(name=klasse)[0]
 
@@ -83,9 +82,7 @@ def setup_platform(hass, config, add_entities, disc_info=None):
         return
 
     entity_id = generate_entity_id(ENTITY_ID_FORMAT, name, hass=hass)
-    hass.states.set(entity_id, filtered_klasse.long_name)
-    # add_entities(WebunitsCalendarEventDevice(name, session, klasse, entity_id), True)
-    session.logout()
+    add_entities([WebunitsCalendarEventDevice(name, session, klasse, entity_id)], True)
 
 
 class WebunitsCalendarEventDevice(CalendarEventDevice):
@@ -99,7 +96,6 @@ class WebunitsCalendarEventDevice(CalendarEventDevice):
         self.data = WebuntisCalendarData(session, klasse)
         self._event = None
         self._name = name
-        self._offset_reached = False
 
     @property
     def event(self):
@@ -113,19 +109,12 @@ class WebunitsCalendarEventDevice(CalendarEventDevice):
 
     async def async_get_events(self, hass, start_date, end_date):
         """Get all events in a specific time frame."""
-        return await self.session.timetable(
-            klasse=self.klasse, start=start_date, end=end_date
-        )
+        return await self.data.async_get_events(hass, start_date, end_date)
 
     def update(self):
         """Update event data."""
         self.data.update()
         event = copy.deepcopy(self.data.event)
-        if event is None:
-            self._event = event
-            return
-        event = calculate_offset(event, OFFSET)
-        self._offset_reached = is_offset_reached(event)
         self._event = event
 
 
@@ -136,6 +125,7 @@ class WebuntisCalendarData:
         """Set up how we are going to search the Webuntis calendar."""
         self.session = session
         self.klasse = klasse
+        self.event = None
 
     async def async_get_events(self, hass, start_date, end_date):
         """Get all events in a specific time frame."""
@@ -143,21 +133,17 @@ class WebuntisCalendarData:
             self.session.timetable(klasse=self.klasse, start=start_date, end=end_date)
         )
         event_list = []
-        for event in period_list:
-            data = {
-                "code": event.code,
-                "type": event.type,
-                "subjects": event.subjects,
-                "rooms": event.rooms,
-                "teachers": event.teachers,
-                "start": event.start,
-                "end": event.end,
+        for period in period_list:
+            event_dict = {
+                "code": period.code,
+                "type": period.type,
+                "subjects": period.subjects,
+                "rooms": period.rooms,
+                "teachers": period.teachers,
+                "start": period.start,
+                "end": period.end,
             }
-
-            data["start"] = get_date(data["start"]).isoformat()
-            data["end"] = get_date(data["end"]).isoformat()
-
-            event_list.append(event)
+            event_list.append(event_dict)
 
         return event_list
 
@@ -165,14 +151,12 @@ class WebuntisCalendarData:
     def update(self):
         """Get the latest data."""
         results = self.session.timetable(
-            klasse=self.klasse,
-            start=dt.start_of_local_day(),
-            end=dt.start_of_local_day() + timedelta(days=1),
+            klasse=self.klasse, start=dt.now(), end=dt.now() + timedelta(hours=1)
         )
 
         # If no matching event could be found
         if results is []:
-            _LOGGER.debug(
+            _LOGGER.error(
                 "No matching event found in the %d results for %s",
                 len(results),
                 self.calendar.name,
@@ -180,14 +164,14 @@ class WebuntisCalendarData:
             self.event = None
             return
 
-        # Populate the entity attributes with the event values
-        event = results[0]
+        # Populate the event with values
+        period = results[0]
         self.event = {
-            "code": event.code,
-            "type": event.type,
-            "subjects": event.subjects,
-            "rooms": event.rooms,
-            "teachers": event.teachers,
-            "start": event.start,
-            "end": event.end,
+            "code": period.code,
+            "type": period.type,
+            "subjects": period.subjects,
+            "rooms": period.rooms,
+            "teachers": period.teachers,
+            "start": period.start,
+            "end": period.end,
         }
