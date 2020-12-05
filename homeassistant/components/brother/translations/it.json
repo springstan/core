@@ -5,7 +5,7 @@
             "unsupported_model": "Questo modello di stampante non \u00e8 supportato."
         },
         "error": {
-            "connection_error": "Impossibile connettersi",
+            "cannot_connect": "Impossibile connettersi",
             "snmp_error": "Server SNMP spento o stampante non supportata.",
             "wrong_host": "Nome host o indirizzo IP non valido."
         },
